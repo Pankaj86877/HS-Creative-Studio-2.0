@@ -6244,7 +6244,6 @@
 
     /* ─── BACKGROUND REMOVER ─────────────────────────────────── */
     (function() {
-        const BGRemover_API_KEY = 'cLGBSpgEQDGD8jR8k5XBVKGR';
 
         const dropZone      = document.getElementById('bgr-drop-zone');
         const fileInput     = document.getElementById('bgr-file-input');
@@ -6303,7 +6302,8 @@
 
         processBtn.addEventListener('click', async () => {
             if (!selectedFile) return;
-            const mode = document.querySelector('input[name="bgrMode"]:checked').value;
+
+            const PROXY_BASE = window.location.origin.includes('localhost:8888') ? '' : 'http://localhost:8888';
 
             statusEl.style.color = 'var(--color-light-blue)';
             statusEl.textContent = 'Processing via AI engine… please wait…';
@@ -6312,38 +6312,88 @@
             downloadSvgBtn.style.display = 'none';
             _currentResultBlob = null;
 
-            const form = new FormData();
-            form.append('image_file', selectedFile);
-            form.append('size', 'auto');
-            form.append('type', mode);
-
             try {
-                const res = await fetch('https://api.remove.bg/v1.0/removebg', {
-                    method: 'POST',
-                    headers: { 'X-Api-Key': BGRemover_API_KEY },
-                    body: form
+                // Read file as base64 (same as Upscaler/Filler pattern)
+                const base64 = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = ev => resolve(ev.target.result.split(',')[1]);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(selectedFile);
                 });
 
-                if (res.ok) {
-                    const blob = await res.blob();
-                    const url  = URL.createObjectURL(blob);
-                    _currentResultBlob = blob;
-                    resultPreview.src = url;
-                    resultPreview.style.display = 'block';
-                    resultLabel.style.display = 'block';
-                    downloadBtn.href = url;
-                    downloadBtn.style.display = 'block';
-                    downloadSvgBtn.style.display = 'block';
-                    statusEl.style.color = 'var(--color-green)';
-                    statusEl.textContent = '✔ Background removed successfully.';
-                } else {
-                    const err = await res.json();
-                    statusEl.style.color = 'var(--color-orange)';
-                    statusEl.textContent = 'API Error: ' + (err.errors?.[0]?.title || 'Unknown error');
+                // POST to Magnific bg-remove — same structure as image-upscale
+                const response = await fetch(`${PROXY_BASE}/api/magnific/bg-remove`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ image: base64 })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.message || err.error || `HTTP ${response.status}`);
                 }
+
+                const resData = await response.json();
+                const taskId = Array.isArray(resData.data) ? resData.data[0]?.task_id : resData.data?.task_id;
+
+                if (!taskId) throw new Error('No task ID returned from AI engine.');
+
+                statusEl.textContent = 'Task queued — AI is removing background… (ID: ' + taskId.substring(0, 8) + ')';
+
+                // Poll for completion — same as Upscaler pattern
+                let status = 'CREATED';
+                let imageUrl = null;
+                const startTime = Date.now();
+                const timeout = 240000;
+
+                while (status !== 'COMPLETED' && status !== 'FAILED') {
+                    if (Date.now() - startTime > timeout) throw new Error('Background removal task timed out.');
+
+                    await new Promise(r => setTimeout(r, 4000));
+                    statusEl.textContent = 'AI is processing… (' + Math.round((Date.now() - startTime) / 1000) + 's)';
+
+                    const pollRes = await fetch(`${PROXY_BASE}/api/magnific/task-status?endpoint=bg-remove&taskId=${taskId}`);
+                    if (!pollRes.ok) continue;
+
+                    const pollData = await pollRes.json();
+                    status = Array.isArray(pollData.data) ? pollData.data[0]?.status : pollData.data?.status;
+
+                    if (status === 'COMPLETED') {
+                        const generated = Array.isArray(pollData.data) ? pollData.data[0]?.generated : pollData.data?.generated;
+                        if (generated && generated.length > 0) imageUrl = generated[0];
+                    } else if (status === 'FAILED') {
+                        throw new Error('Magnific background removal task failed on server.');
+                    }
+                }
+
+                if (!imageUrl) throw new Error('No result image returned from AI engine.');
+
+                // Proxy the CDN image to avoid CORS — same as Upscaler
+                const proxiedUrl = imageUrl.startsWith('data:')
+                    ? imageUrl
+                    : `${PROXY_BASE}/api/proxy-image?url=${encodeURIComponent(imageUrl)}`;
+
+                // Fetch blob for download + SVG (same as before)
+                const imgRes = await fetch(proxiedUrl);
+                const blob = await imgRes.blob();
+                const blobUrl = URL.createObjectURL(blob);
+
+                _currentResultBlob = blob;
+                resultPreview.src = blobUrl;
+                resultPreview.style.display = 'block';
+                resultLabel.style.display = 'block';
+                downloadBtn.href = blobUrl;
+                downloadBtn.style.display = 'block';
+                downloadSvgBtn.style.display = 'block';
+                statusEl.style.color = 'var(--color-green)';
+                statusEl.textContent = '✔ Background removed successfully.';
+
             } catch (e) {
                 statusEl.style.color = 'var(--color-orange)';
-                statusEl.textContent = 'Network error while connecting to AI processing system.';
+                statusEl.textContent = 'Error: ' + e.message;
                 console.error(e);
             } finally {
                 processBtn.disabled = false;
