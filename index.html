@@ -728,6 +728,23 @@
             transition: opacity 0.2s;
         }
         #section-bg-remover .bgr-btn-download:hover { opacity: 0.88; }
+        #section-bg-remover .bgr-btn-download-svg {
+            width: 100%;
+            padding: 13px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            background: #7c3aed;
+            color: #ffffff;
+            text-align: center;
+            text-decoration: none;
+            display: none;
+            box-sizing: border-box;
+            transition: opacity 0.2s;
+        }
+        #section-bg-remover .bgr-btn-download-svg:hover { opacity: 0.88; }
         #section-bg-remover .bgr-status {
             text-align: center;
             margin-top: 12px;
@@ -1430,6 +1447,12 @@
             color: #1877F2;
             border: 1px solid rgba(24, 119, 242, 0.25);
             box-shadow: 0 0 10px rgba(24, 119, 242, 0.15);
+        }
+        .platform-status-badge.linkedin {
+            background: rgba(10, 102, 194, 0.1);
+            color: #0A66C2;
+            border: 1px solid rgba(10, 102, 194, 0.25);
+            box-shadow: 0 0 10px rgba(10, 102, 194, 0.15);
         }
         .platform-status-badge.unknown {
             background: rgba(232, 240, 242, 0.05);
@@ -3002,6 +3025,7 @@
                 <div class="bgr-actions">
                     <button class="bgr-btn-process" id="bgr-process-btn" disabled>✂ Remove Background</button>
                     <a class="bgr-btn-download" id="bgr-download-btn" download="background-removed.png">⬇ Download Result Image</a>
+                    <button class="bgr-btn-download-svg" id="bgr-download-svg-btn">⬇ Download SVG</button>
                 </div>
 
                 <div class="bgr-status" id="bgr-status"></div>
@@ -5736,7 +5760,7 @@
             if (platform) {
                 this.extractMedia(platform, url);
             } else {
-                this.showStatus('Invalid URL. Please paste a valid YouTube, Instagram, or Facebook link.', 'error');
+                this.showStatus('Invalid URL. Please paste a valid YouTube, Instagram, LinkedIn, or Facebook link.', 'error');
             }
         }
 
@@ -5747,6 +5771,8 @@
                 return 'instagram';
             } else if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) {
                 return 'facebook';
+            } else if (/linkedin\.com|lnkd\.in/i.test(url)) {
+                return 'linkedin';
             }
             return null;
         }
@@ -5763,6 +5789,9 @@
             } else if (platform === 'facebook') {
                 this.badgePlatform.classList.add('facebook', 'visible');
                 this.badgePlatform.textContent = 'Facebook Detected';
+            } else if (platform === 'linkedin') {
+                this.badgePlatform.classList.add('linkedin', 'visible');
+                this.badgePlatform.textContent = 'LinkedIn Detected';
             } else {
                 this.badgePlatform.classList.add('unknown', 'visible');
                 this.badgePlatform.textContent = 'Detecting Platform...';
@@ -5864,6 +5893,11 @@
                 const id = parts[parts.length - 1] || 'post';
                 title = isReel ? `Instagram Reel [${id}]` : `Instagram Post [${id}]`;
                 author = '@' + id.substring(0, 8).toLowerCase();
+            } else if (platform === 'linkedin') {
+                const parts = url.split('/').filter(Boolean);
+                const id = parts[parts.length - 1] || 'post';
+                title = `LinkedIn Video [${id.substring(0, 8)}]`;
+                author = 'LinkedIn Professional';
             } else {
                 title = 'Facebook Video Post';
                 author = 'FB User';
@@ -5926,17 +5960,42 @@
             if (!this.videoInfo) return;
             this.loaderPreview.style.display = 'none';
 
+            // Derive a preview URL: use top-level url, else first format url, else empty
+            let previewUrl = this.videoInfo.url || '';
+            if (!previewUrl && this.videoInfo.formats) {
+                const firstMp4 = (this.videoInfo.formats.mp4 || [])[0];
+                if (firstMp4 && firstMp4.url) {
+                    // For server-fetched LinkedIn/Instagram, proxy the preview through backend to avoid CORS
+                    if (this.isServerOnline && firstMp4.url.startsWith('http')) {
+                        const inputUrl = this.inputUrl.value.trim();
+                        previewUrl = `${this.apiBase}/download?url=${encodeURIComponent(inputUrl)}&format=mp4&quality=${firstMp4.quality}`;
+                    } else {
+                        previewUrl = firstMp4.url;
+                    }
+                }
+            }
+
             // Show video or photo
             if (this.videoInfo.mediaType === 'image') {
-                this.imgPreview.src = this.videoInfo.url;
-                this.imgPreview.style.display = 'block';
+                this.imgPreview.src = previewUrl || this.videoInfo.thumbnail || '';
+                this.imgPreview.style.display = previewUrl || this.videoInfo.thumbnail ? 'block' : 'none';
                 this.videoPreview.style.display = 'none';
                 this.videoPreview.src = '';
             } else {
-                this.videoPreview.src = this.videoInfo.url;
-                this.videoPreview.style.display = 'block';
+                if (previewUrl) {
+                    this.videoPreview.src = previewUrl;
+                    this.videoPreview.style.display = 'block';
+                } else {
+                    // No preview URL available, hide video player and show thumbnail as image
+                    this.videoPreview.style.display = 'none';
+                    this.videoPreview.src = '';
+                    if (this.videoInfo.thumbnail) {
+                        this.imgPreview.src = this.videoInfo.thumbnail;
+                        this.imgPreview.style.display = 'block';
+                    }
+                }
                 
-                // For YouTube thumbnails
+                // Set poster
                 const vid = this.extractVideoId(this.inputUrl.value.trim());
                 if (vid) {
                     this.videoPreview.poster = `https://img.youtube.com/vi/${vid}/hqdefault.jpg`;
@@ -5945,7 +6004,7 @@
                 } else {
                     this.videoPreview.removeAttribute('poster');
                 }
-                this.imgPreview.style.display = 'none';
+                this.imgPreview.style.display = previewUrl ? 'none' : (this.videoInfo.thumbnail ? 'block' : 'none');
             }
 
             // Update Metadata
@@ -6194,8 +6253,11 @@
         const origLabel     = document.getElementById('bgr-orig-label');
         const resultLabel   = document.getElementById('bgr-result-label');
         const processBtn    = document.getElementById('bgr-process-btn');
-        const downloadBtn   = document.getElementById('bgr-download-btn');
-        const statusEl      = document.getElementById('bgr-status');
+        const downloadBtn    = document.getElementById('bgr-download-btn');
+        const downloadSvgBtn = document.getElementById('bgr-download-svg-btn');
+        const statusEl       = document.getElementById('bgr-status');
+
+        let _currentResultBlob = null;
 
         let selectedFile = null;
 
@@ -6229,6 +6291,8 @@
                 resultPreview.style.display = 'none';
                 resultLabel.style.display = 'none';
                 downloadBtn.style.display = 'none';
+                downloadSvgBtn.style.display = 'none';
+                _currentResultBlob = null;
                 statusEl.textContent = '';
                 processBtn.disabled = false;
                 document.getElementById('bgr-upload-text').innerHTML =
@@ -6245,6 +6309,8 @@
             statusEl.textContent = 'Processing via AI engine… please wait…';
             processBtn.disabled = true;
             downloadBtn.style.display = 'none';
+            downloadSvgBtn.style.display = 'none';
+            _currentResultBlob = null;
 
             const form = new FormData();
             form.append('image_file', selectedFile);
@@ -6261,11 +6327,13 @@
                 if (res.ok) {
                     const blob = await res.blob();
                     const url  = URL.createObjectURL(blob);
+                    _currentResultBlob = blob;
                     resultPreview.src = url;
                     resultPreview.style.display = 'block';
                     resultLabel.style.display = 'block';
                     downloadBtn.href = url;
                     downloadBtn.style.display = 'block';
+                    downloadSvgBtn.style.display = 'block';
                     statusEl.style.color = 'var(--color-green)';
                     statusEl.textContent = '✔ Background removed successfully.';
                 } else {
@@ -6279,6 +6347,65 @@
                 console.error(e);
             } finally {
                 processBtn.disabled = false;
+            }
+        });
+
+        // ── Download SVG ──
+        downloadSvgBtn.addEventListener('click', async () => {
+            if (!_currentResultBlob) {
+                statusEl.style.color = 'var(--color-orange)';
+                statusEl.textContent = 'No processed image available. Please remove the background first.';
+                return;
+            }
+            try {
+                // Convert blob to base64 data URI
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    try {
+                        const dataUri = ev.target.result;
+                        // Create an Image to get natural dimensions
+                        const img = new Image();
+                        img.onload = function() {
+                            const w = img.naturalWidth  || 800;
+                            const h = img.naturalHeight || 600;
+                            // Build SVG with embedded transparent PNG
+                            const svgContent = [
+                                '<?xml version="1.0" encoding="UTF-8"?>',
+                                `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`,
+                                `  <image width="${w}" height="${h}" xlink:href="${dataUri}"/>`,
+                                '</svg>'
+                            ].join('\n');
+                            const svgBlob = new Blob([svgContent], { type: 'image/svg+xml' });
+                            const svgUrl  = URL.createObjectURL(svgBlob);
+                            const a = document.createElement('a');
+                            a.href     = svgUrl;
+                            a.download = 'background-removed.svg';
+                            a.style.display = 'none';
+                            document.body.appendChild(a);
+                            a.click();
+                            setTimeout(() => {
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(svgUrl);
+                            }, 1000);
+                        };
+                        img.onerror = function() {
+                            statusEl.style.color = 'var(--color-orange)';
+                            statusEl.textContent = 'SVG generation failed: could not read image dimensions.';
+                        };
+                        img.src = dataUri;
+                    } catch(err) {
+                        statusEl.style.color = 'var(--color-orange)';
+                        statusEl.textContent = 'SVG generation failed: ' + err.message;
+                    }
+                };
+                reader.onerror = function() {
+                    statusEl.style.color = 'var(--color-orange)';
+                    statusEl.textContent = 'SVG generation failed: could not read processed image.';
+                };
+                reader.readAsDataURL(_currentResultBlob);
+            } catch(err) {
+                statusEl.style.color = 'var(--color-orange)';
+                statusEl.textContent = 'SVG generation failed: ' + err.message;
             }
         });
     })();
